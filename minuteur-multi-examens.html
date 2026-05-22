@@ -787,14 +787,15 @@ const IB_TYPE_LABELS={
 // ── IB ANNOUNCEMENTS TABLE ──
 // null = no announcement for this event/type
 // Functions receive (exam, lang, now) where now=Date object at trigger time
-function ibText(type, event, lang, exam, now){
+function ibText(type, event, lang, exam, now, timer){
   const fr=lang==='fr';
-  const fr2=lang==='fr';
-  const dur=fmtSpoken(exam.timers.find(ti=>ti.label==='Principal')?.total||0,fr2);
-  const heure=now?(now.getHours()+(fr2?' heures ':' hours ')+now.getMinutes().toString().padStart(2,'0')):'';
+  // Use specific timer duration if provided, otherwise principal
+  const timerForDur=timer||exam.timers.find(ti=>ti.label==='Principal');
+  const dur=fmtSpoken(timerForDur?.total||0,fr);
+  const isExtra=timer&&timer.label!=='Principal';
+  const heure=now?(now.getHours()+(fr?' heures ':' hours ')+now.getMinutes().toString().padStart(2,'0')):'';
   const heureEn=now?(now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes()):'';
 
-  // Reading start — same for all types except mcq (no reading)
   if(event==='readingStart'){
     if(type==='mcq')return null;
     return fr
@@ -802,7 +803,6 @@ function ibText(type, event, lang, exam, now){
       :"You may now open your examination paper. Your reading time starts now.";
   }
 
-  // Reading end — same for all types except mcq
   if(event==='readingEnd'){
     if(type==='mcq')return null;
     return fr
@@ -810,21 +810,18 @@ function ibText(type, event, lang, exam, now){
       :`Your reading time is over. You have ${dur} for this examination paper. You may start to write. The time now is ${heureEn}.`;
   }
 
-  // Exam start (only relevant for mcq which has no reading)
   if(event==='examStart'){
-    if(type!=='mcq')return null; // others use readingEnd as the start signal
+    if(type!=='mcq')return null;
     return fr
       ?`Vous pouvez commencer à écrire. Il est ${heure}.`
       :`You may now start the examination. The time now is ${heureEn}.`;
   }
 
-  // 30-minute warning — all types except acq
   if(event==='alert30'){
     if(type==='acq')return null;
     return fr?"Il vous reste 30 minutes.":"The time remaining is 30 minutes.";
   }
 
-  // 5-minute warning
   if(event==='alert5'){
     if(type==='acq')return null;
     if(type==='ns')
@@ -840,7 +837,6 @@ function ibText(type, event, lang, exam, now){
     return null;
   }
 
-  // End of exam — same for all types
   if(event==='end'){
     return fr
       ?"L'épreuve est terminée. Veuillez arrêter d'écrire immédiatement. Il ne vous est pas permis d'ajouter quoi que ce soit à vos réponses ni de les modifier."
@@ -850,47 +846,61 @@ function ibText(type, event, lang, exam, now){
   return null;
 }
 
-// Group exams by their IB announcement text, return array of {text, exams[]}
-// exams with null text are omitted
+// Group announcements by text. For events that include duration (readingEnd),
+// group per-timer so extra-time candidates get the correct duration announced.
+// Returns array of {text, exams[], timerLabel} where timerLabel is null for exam-level events.
 function ibGroupAnnouncements(examList, event, now){
-  const groups={}; // text → [exam, ...]
+  const groups={}; // text → {exams:[], timerLabel, timerIds:[]}
+  const durationEvents=['readingEnd']; // events where timer duration matters
+
   examList.forEach(exam=>{
-    const text=ibText(exam.ibType||'ns', event, announceLang, exam, now);
-    if(!text)return;
-    if(!groups[text])groups[text]=[];
-    groups[text].push(exam);
-  });
-  return Object.entries(groups).map(([text,exams])=>({text,exams}));
-}
-
-// Build prefix: "Pour Maths : " or "Pour Maths et Français : "
-// showExtraTime=true only when the announcement differs for extra-time timers
-function buildPrefix(examList, allRunningExams, fr, showExtraTime=false){
-  const allCovered = examList.length >= allRunningExams.length;
-  if(allCovered && !showExtraTime) return ''; // announcement applies to all, no prefix
-
-  const parts = examList.map(e => {
-    const extras = showExtraTime && e.timers
-      ? e.timers.filter(ti=>!ti.done && ti.label!=='Principal').map(ti=>ti.label)
-      : [];
-    if(allCovered){
-      // Only show extra time label if requested
-      return extras.length ? (fr?`temps supplémentaire de ${joinList(extras,fr)}`:`additional time of ${joinList(extras,fr)}`) : null;
+    if(durationEvents.includes(event)){
+      // Fire once per active timer so each duration is announced correctly
+      exam.timers.filter(t=>!t.done).forEach(timer=>{
+        const text=ibText(exam.ibType||'ns', event, announceLang, exam, now, timer);
+        if(!text)return;
+        const key=text+'||'+timer.label; // group by text+timerLabel
+        if(!groups[key])groups[key]={text,items:[],timerLabel:timer.label};
+        groups[key].items.push({exam,timer});
+      });
+    } else {
+      const text=ibText(exam.ibType||'ns', event, announceLang, exam, now);
+      if(!text)return;
+      if(!groups[text])groups[text]={text,items:[],timerLabel:null};
+      groups[text].items.push({exam,timer:null});
     }
-    if(extras.length)
-      return fr ? `${e.title}, temps supplémentaire de ${joinList(extras,fr)}` : `${e.title}, additional time of ${joinList(extras,fr)}`;
-    return e.title;
-  }).filter(Boolean);
+  });
 
-  if(!parts.length) return '';
-  return (fr ? `Pour ${joinList(parts,fr)} : ` : `For ${joinList(parts,fr)}: `);
+  return Object.values(groups).map(g=>({
+    text:g.text,
+    exams:[...new Set(g.items.map(i=>i.exam))],
+    timers:g.items.map(i=>i.timer).filter(Boolean),
+    timerLabel:g.timerLabel
+  }));
 }
 
 function ibBuildAnnouncement(group, allRunningExams){
   const fr=announceLang==='fr';
-  // IB: groups already formed by identical text, no need to mention extra time
-  const prefix = buildPrefix(group.exams, allRunningExams, fr, false);
-  return prefix + group.text;
+  const allTimers=allRunningExams.flatMap(e=>e.timers.filter(t=>!t.done));
+  // If this group covers all active timers → no prefix needed
+  const groupTimerCount=group.timers.length||group.exams.length;
+  const totalActive=group.timerLabel
+    ? allTimers.filter(t=>t.label===group.timerLabel).length // same timer type across exams
+    : allRunningExams.length;
+
+  if(groupTimerCount>=totalActive) return group.text;
+
+  // Build prefix with exam names and extra-time label if applicable
+  const parts=group.exams.map(e=>{
+    if(group.timerLabel&&group.timerLabel!=='Principal'){
+      return fr
+        ?`${e.title||('Épreuve '+e.id)}, temps supplémentaire de ${group.timerLabel}`
+        :`${e.title||('Exam '+e.id)}, additional time of ${group.timerLabel}`;
+    }
+    return e.title||('Épreuve '+e.id);
+  });
+  const list=joinList(parts,fr);
+  return (fr?`Pour ${list} : `:`For ${list}: `)+group.text;
 }
 
 function addExam(){
@@ -1304,10 +1314,12 @@ function getTemplate(event){
 loadTemplates();
 
 // Render a template to a string, replacing tokens with runtime values
-function renderTemplate(event,{exam=null,minutes=null,now=null}={}){
+// timer: specific timer to use for duration (if null, uses Principal)
+function renderTemplate(event,{exam=null,minutes=null,now=null,timer=null}={}){
   const segs=getTemplate(event);
   const fr=announceLang==='fr';
-  const dur=exam?fmtSpoken(exam.timers.find(t=>t.label==='Principal')?.total||0,fr):'';
+  const timerForDur=timer||(exam?exam.timers.find(t=>t.label==='Principal'):null);
+  const dur=timerForDur?fmtSpoken(timerForDur.total||0,fr):'';
   const readingDur=exam?fmtSpoken(exam.readingTotal||0,fr):'';
   const heure=now?(fr?(now.getHours()+' heures '+now.getMinutes().toString().padStart(2,'0')):(now.getHours()+':'+ now.getMinutes().toString().padStart(2,'0'))):'';
   const restant=minutes!=null?fmtSpoken(minutes*60,fr):'';
@@ -1326,35 +1338,68 @@ function buildAnnouncementBase(event,options={}){
   return renderTemplate(event,options);
 }
 
-function buildReadingStartText(examList){
+// Group exams (or exam+timer pairs) by their rendered announcement text.
+// Returns [{text, exams[], timers[]}] — one entry per unique text.
+// For events with {duree} token, groups by each timer's text separately.
+// Group exams by their rendered announcement text using only the Principal timer duration.
+// If no Principal, falls back to first active timer. Extra-time timers don't get
+// separate start/end announcements — only the Principal duration is announced.
+function groupByText(event, examList, now){
+  const groups={};
+  examList.forEach(exam=>{
+    const principal=exam.timers.find(t=>t.label==='Principal'&&!t.done)
+      ||exam.timers.find(t=>!t.done)
+      ||exam.timers[0];
+    const text=buildAnnouncementBase(event,{exam,now,timer:principal});
+    if(!text)return;
+    if(!groups[text])groups[text]={text,exams:[]};
+    groups[text].exams.push(exam);
+  });
+  return Object.values(groups);
+}
+
+// Build grouped announcements for a non-IB event.
+// Returns [{text, examIds, timerIds}] — one entry per unique announcement text.
+function buildGroupedAnnouncements(event, examList, now, allActiveExams){
   const fr=announceLang==='fr';
-  const exam=examList[0]||null;
-  const base=buildAnnouncementBase('readingStart',{exam,now:new Date()});
-  if(!base)return null;
+  const groups=groupByText(event, examList, now);
+
+  return groups.map(group=>{
+    const needsPrefix=group.exams.length<allActiveExams.length;
+    let text=group.text;
+    if(needsPrefix){
+      const list=joinList(group.exams.map(e=>e.title||('Épreuve '+e.id)),fr);
+      text=(fr?`Pour ${list} : `:`For ${list}: `)+group.text;
+    }
+    return {
+      text,
+      examIds:group.exams.map(e=>e.id),
+      timerIds:null
+    };
+  });
+}
+
+function buildReadingStartText(examList){
+  // readingStart has no duration — same for all
+  const now=new Date();
+  const fr=announceLang==='fr';
+  const base=buildAnnouncementBase('readingStart',{exam:examList[0]||null,now});
+  if(!base)return [{text:base,examIds:examList.map(e=>e.id),timerIds:null}];
   const allReading=exams.filter(e=>e.status==='reading');
-  if(examList.length===0||examList.length>=allReading.length)return base;
+  const needsPrefix=examList.length>0&&examList.length<allReading.length;
+  if(!needsPrefix)return [{text:base,examIds:examList.map(e=>e.id),timerIds:null}];
   const list=joinList(examList.map(e=>e.title).filter(Boolean),fr);
-  return (fr?`Pour ${list} : `:`For ${list}: `)+base;
+  return [{text:(fr?`Pour ${list} : `:`For ${list}: `)+base,examIds:examList.map(e=>e.id),timerIds:null}];
 }
 function buildReadingEndText(examList){
-  const fr=announceLang==='fr';
-  const exam=examList[0]||null;
-  const base=buildAnnouncementBase('readingEnd',{exam,now:new Date()});
-  if(!base)return null;
-  const totalRunning=exams.filter(e=>e.status==='running').length;
-  if(examList.length===0||examList.length>=totalRunning)return base;
-  const list=joinList(examList.map(e=>e.title).filter(Boolean),fr);
-  return (fr?`Pour ${list} : `:`For ${list}: `)+base;
+  const now=new Date();
+  const allRunning=exams.filter(e=>e.status==='running');
+  return buildGroupedAnnouncements('readingEnd',examList,now,allRunning);
 }
 function buildExamStartText(examList){
-  const fr=announceLang==='fr';
-  const exam=examList[0]||null;
-  const base=buildAnnouncementBase('examStart',{exam,now:new Date()});
-  if(!base)return null;
+  const now=new Date();
   const allRunning=exams.filter(e=>e.status==='running');
-  if(examList.length===0||examList.length>=allRunning.length)return base;
-  const list=joinList(examList.map(e=>e.title).filter(Boolean),fr);
-  return (fr?`Pour ${list} : `:`For ${list}: `)+base;
+  return buildGroupedAnnouncements('examStart',examList,now,allRunning);
 }
 function buildAlertTemplateText(event,minutes,timerContexts){
   // Build base from template with restant token
@@ -1409,7 +1454,8 @@ function ibAnnounce(examList, event, interrupt=false, examIds=null){
   const ids=examIds||examList.map(e=>e.id);
   groups.forEach(group=>{
     const text=ibBuildAnnouncement(group, allRunning);
-    announce(text,{interrupt,examIds:ids});
+    const tIds=group.timers&&group.timers.length>0?group.timers.map(t=>t.id):null;
+    announce(text,{interrupt,examIds:ids,timerIds:tIds});
   });
 }
 
@@ -1441,7 +1487,9 @@ function startReadingSound(examList){
   if(audioMode==='voice'){
     const ids=examList.map(e=>e.id);
     if(ibMode)ibAnnounce(examList,'readingStart',false,ids);
-    else announce(buildReadingStartText(examList),{examIds:ids});
+    else{
+      buildReadingStartText(examList).forEach(g=>announce(g.text,{examIds:g.examIds,timerIds:g.timerIds}));
+    }
   }
   beep(523,.15);setTimeout(()=>beep(659,.15),180);setTimeout(()=>beep(784,.15),360);
 }
@@ -1450,7 +1498,9 @@ function endReadingSound(examList){
   if(audioMode==='voice'){
     const ids=examList.map(e=>e.id);
     if(ibMode)ibAnnounce(examList,'readingEnd',false,ids);
-    else announce(buildReadingEndText(examList),{examIds:ids});
+    else{
+      buildReadingEndText(examList).forEach(g=>announce(g.text,{examIds:g.examIds,timerIds:g.timerIds}));
+    }
   }
   beep(784,.15);setTimeout(()=>beep(659,.15),180);setTimeout(()=>beep(523,.2),360);
 }
@@ -1459,7 +1509,9 @@ function startExamSound(examList){
   if(audioMode==='voice'){
     const ids=examList.map(e=>e.id);
     if(ibMode)ibAnnounce(examList,'examStart',false,ids);
-    else announce(buildExamStartText(examList),{examIds:ids});
+    else{
+      buildExamStartText(examList).forEach(g=>announce(g.text,{examIds:g.examIds,timerIds:g.timerIds}));
+    }
   }
   beep(523,.15);setTimeout(()=>beep(659,.15),180);setTimeout(()=>beep(784,.15),360);setTimeout(()=>beep(1047,.3),540);
 }
