@@ -12,3 +12,4 @@ The current time shows at the top.
 Warning times are shown next to the main time remaining and cross off once completed.
 If there are multiple exams, it says which exam the notification is for.
 Add your own logo to replace the default one.
+If you want a list of exams to select from, go to IB programme then export the CSV. Use this to format your list of exams into the same format (try using AI with your exam list and the sample CSV file for it to use and that should work) then import the list and you should have a list of exams to select from. If you correctly put in the duration, type of exam (for IB to select if you need reading time or not and the types of announcements) and the date, the default when you click on a filter is to show you all files in date order for the next week so you can find upcoming exams easily. You can even create and import your own mock examinations if you like.
