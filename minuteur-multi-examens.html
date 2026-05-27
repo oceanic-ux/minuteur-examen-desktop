@@ -1324,6 +1324,7 @@ function setArc(tid,left,total,state,r){
 // ── LANGUAGE & VOICE ──
 let announceLang='fr';
 let selectedVoice=null;
+let _savedVoiceName='';
 function setLang(l){
   announceLang=l;
   // Update all lang buttons (setup panel + side panel)
@@ -1337,7 +1338,7 @@ function setLang(l){
       btn.style.fontWeight=active?'500':'400';
     });
   });
-  selectedVoice=null;populateVoices();
+  selectedVoice=null;_savedVoiceName='';savePrefs();populateVoices();
   if(_voiceSettingsOpen)buildVoiceSettingsPanel();
   if(currentTab==='voice')buildVoiceAlertsPanel();
   savePrefs();
@@ -1350,7 +1351,18 @@ function populateVoices(){
   const filtered=voices.filter(v=>v.lang.toLowerCase().startsWith(lp));
   sel.innerHTML='<option value="">Voix par défaut</option>';
   filtered.forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=`${v.name} (${v.lang})`;sel.appendChild(o);});
-  sel.onchange=()=>{const name=sel.value;selectedVoice=name?voices.find(v=>v.name===name)||null:null;};
+  // Restore saved voice
+  const savedName=_savedVoiceName||(selectedVoice?selectedVoice.name:'');
+  if(savedName){
+    const match=voices.find(v=>v.name===savedName);
+    if(match){selectedVoice=match;sel.value=savedName;}
+  }
+  sel.onchange=()=>{
+    const name=sel.value;
+    selectedVoice=name?voices.find(v=>v.name===name)||null:null;
+    _savedVoiceName=name;
+    savePrefs();
+  };
 }
 if(window.speechSynthesis){window.speechSynthesis.onvoiceschanged=populateVoices;populateVoices();}
 
@@ -3906,6 +3918,7 @@ function updateLogoPreview(){
     if(typeof p.ibMode==='boolean')ibMode=p.ibMode;
     if(p.alertSecs)alertSecs=p.alertSecs;
     if(p.ALERT_30)ALERT_30=p.ALERT_30;
+    if(p.selectedVoiceName)_savedVoiceName=p.selectedVoiceName;
     // Restore reading default duration
     if(p.readingDefaultMin!==undefined){
       const el=document.getElementById('inp-reading');
@@ -3926,6 +3939,7 @@ function savePrefs(){
     const p={
       uiLang,audioMode,announceLang,readingOn,alert30Enabled,alert5Enabled,ibMode,
       alertSecs,ALERT_30,
+      selectedVoiceName:selectedVoice?selectedVoice.name:'',
       defaultP1:examDefs[0]?.p1||'25%',
       defaultP2:examDefs[0]?.p2||'50%',
     };
